@@ -1,16 +1,36 @@
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from app.config import GEMINI_API_KEY
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-3.1-flash-lite")
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+CHAT_MODEL = "gemini-3.1-flash-lite"
+EMBED_MODEL = "gemini-embedding-001"
 
 
 def generate_reply(history: list[dict]) -> str:
     """
     history: list of {"role": "user"|"model", "parts": "text"}
-    The LAST item in history is the new message being sent.
-    Everything before it is prior context.
+    The LAST item is the new message; everything before it is prior context.
     """
-    chat = model.start_chat(history=history[:-1])
-    response = chat.send_message(history[-1]["parts"])
+    contents = [
+        types.Content(role=h["role"], parts=[types.Part.from_text(text=h["parts"])])
+        for h in history
+    ]
+    response = client.models.generate_content(
+        model=CHAT_MODEL,
+        contents=contents,
+    )
     return response.text
+
+
+def embed_text(text: str) -> list[float]:
+    result = client.models.embed_content(
+        model=EMBED_MODEL,
+        contents=text,
+        config=types.EmbedContentConfig(
+            task_type="retrieval_document",
+            output_dimensionality=768,
+        ),
+    )
+    return result.embeddings[0].values

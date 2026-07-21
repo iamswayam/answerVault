@@ -1,0 +1,247 @@
+[
+  {
+    "topic": "Python",
+    "question": "Deep copy vs shallow copy?",
+    "answer": "Shallow copy makes a new outer object but inner objects are still shared (same reference). Deep copy makes a fully independent clone, nothing shared. Remember: shallow = same house, new address label. Deep = brand new house."
+  },
+  {
+    "topic": "Python",
+    "question": "Multithreading vs multiprocessing?",
+    "answer": "Threads share memory, best for I/O-bound tasks (API calls, file/network wait), but the GIL stops two threads running Python bytecode at the same instant. Processes have separate memory and truly run in parallel, best for CPU-bound tasks. Remember: threads share one box of memory, processes each get their own box."
+  },
+  {
+    "topic": "Python",
+    "question": "What do *args and **kwargs do?",
+    "answer": "*args collects extra positional arguments into a tuple. **kwargs collects extra keyword arguments into a dict. Used when a function needs to accept a flexible number of inputs."
+  },
+  {
+    "topic": "Python",
+    "question": "Why is a mutable default argument a bug?",
+    "answer": "Default argument values are created once, at function definition time, not on every call. A mutable default (like a list) gets shared and keeps growing across calls. Fix: use None as the default and create the list inside the function body if it is None."
+  },
+  {
+    "topic": "Python",
+    "question": "List comprehension vs generator expression?",
+    "answer": "A list comprehension builds the whole list in memory immediately. A generator expression produces values lazily, one at a time, better for large or infinite sequences."
+  },
+  {
+    "topic": "Python",
+    "question": "What are the two-pointer and sliding window patterns?",
+    "answer": "Two-pointer uses two indexes moving toward or away from each other to scan an array in one pass, instead of nested loops, common for sorted arrays, pairs, and palindrome checks. Sliding window keeps a moving range of elements and adjusts its edges instead of rescanning, common for longest or shortest subarray meeting a condition problems."
+  },
+  {
+    "topic": "Python",
+    "question": "Find duplicates in a list (quick coding answer).",
+    "answer": "Use a set to track seen numbers and a set to collect duplicates, iterating once through the list and adding to duplicates whenever a number has already been seen. A set gives O(1) lookup, so this runs in O(n)."
+  },
+  {
+    "topic": "Python",
+    "question": "What is the GIL?",
+    "answer": "The Global Interpreter Lock. Only one thread executes Python bytecode at a time, even on a multi-core CPU. That is why CPU-heavy work needs multiprocessing, not threading. Remember: one lock, one thread at a time, like one till, many cashiers."
+  },
+  {
+    "topic": "Python",
+    "question": "What is MRO (Method Resolution Order)?",
+    "answer": "The order Python searches parent classes to find a method in multiple inheritance. Uses C3 linearization: current class, then parents left to right, depth first, no repeats. Check with ClassName.__mro__."
+  },
+  {
+    "topic": "Python",
+    "question": "What is OOP in Python, and the 4 pillars? Give an abstraction example.",
+    "answer": "OOP is organizing code around objects that bundle data and behavior. Encapsulation bundles data and restricts direct access. Abstraction hides detail and exposes only what is needed. Inheritance reuses behavior from a parent class. Polymorphism means the same method name behaves differently per class. Example: an abstract Payment class with an abstractmethod pay, then a UpiPayment subclass implementing pay, demonstrates abstraction, inheritance, and polymorphism together."
+  },
+  {
+    "topic": "Python",
+    "question": "Difference between is and ==?",
+    "answer": "== compares values, whether two things are equal. is compares identity, whether it is the exact same object in memory. Two lists with the same values can be == True but is False if they are different objects."
+  },
+  {
+    "topic": "Python",
+    "question": "What is idempotency?",
+    "answer": "An operation is idempotent if calling it once or many times gives the same end result. GET, PUT, DELETE are idempotent by design; POST usually is not. Remember: pressing an elevator button 5 times still sends it to the same floor once."
+  },
+  {
+    "topic": "Python",
+    "question": "Iterators vs generators?",
+    "answer": "An iterator is any object with __next__(); a generator is a simple way to build one, using a function with yield. Generators are memory-efficient because values are produced one at a time, on demand."
+  },
+  {
+    "topic": "Python",
+    "question": "Mutable vs immutable types?",
+    "answer": "Mutable objects (list, dict, set) can be changed in place after creation. Immutable ones (str, tuple, int, frozenset) cannot; any change actually creates a new object."
+  },
+  {
+    "topic": "Python",
+    "question": "@staticmethod vs @classmethod vs a normal method?",
+    "answer": "A normal method takes self and can access instance data. @classmethod takes cls and works with the class itself, for example alternate constructors. @staticmethod takes neither; it is just a regular function placed inside the class for organization."
+  },
+  {
+    "topic": "Python",
+    "question": "What does a context manager (with statement) do?",
+    "answer": "Guarantees setup and cleanup happen automatically, even if an error occurs. Most common example: with open('file') as f automatically closes the file afterward."
+  },
+  {
+    "topic": "Django",
+    "question": "Explain Django's request-response flow.",
+    "answer": "Request hits urls.py, routed to a view. The view talks to the model/ORM, which queries the database. The view returns a response, usually rendered through a template or serializer."
+  },
+  {
+    "topic": "Django",
+    "question": "What is the Django ORM and why use it?",
+    "answer": "Lets you write Python instead of raw SQL to query the database. Django translates it to SQL and keeps code database-agnostic. Example: User.objects.filter(is_active=True).order_by('-date_joined')[:5]"
+  },
+  {
+    "topic": "Django",
+    "question": "What is Django middleware?",
+    "answer": "Code that runs for every request/response, before it hits the view and after it leaves, used for auth, logging, CORS. Remember: a chain of checkpoints the request passes through."
+  },
+  {
+    "topic": "Django",
+    "question": "What are Django signals?",
+    "answer": "A way for one part of the app to get notified when something happens elsewhere, without tight coupling, for example post_save fires automatically after a model is saved."
+  },
+  {
+    "topic": "Django",
+    "question": "What are Django migrations?",
+    "answer": "Version control for your database schema. makemigrations generates the change files from your models, migrate applies them to the actual database."
+  },
+  {
+    "topic": "Django",
+    "question": "select_related vs prefetch_related?",
+    "answer": "Both prevent the N+1 query problem. select_related does a SQL JOIN, for foreign key or one-to-one relationships, in a single query. prefetch_related runs a separate query and joins in Python, for many-to-many or reverse foreign key relationships."
+  },
+  {
+    "topic": "Django",
+    "question": "Class-based views vs function-based views?",
+    "answer": "Function-based views are plain functions, simple and explicit. Class-based views, like generic ListView, give reusable structure and less boilerplate for common patterns such as CRUD, at the cost of more magic."
+  },
+  {
+    "topic": "DRF",
+    "question": "What does DRF add on top of Django?",
+    "answer": "Django builds web pages; DRF builds JSON APIs on the same models. It adds serializers for data conversion and validation, viewsets and generic views for ready-made CRUD logic, routers for automatic URL wiring, and pluggable authentication and permissions."
+  },
+  {
+    "topic": "DRF",
+    "question": "What do serializers do, and ModelSerializer vs Serializer?",
+    "answer": "A serializer converts between Python or model objects and JSON, and validates incoming data. ModelSerializer auto-generates fields and validation from a model, fast and less code. Plain Serializer requires declaring every field by hand, giving more control."
+  },
+  {
+    "topic": "DRF",
+    "question": "APIView vs generic views vs ViewSet?",
+    "answer": "APIView is the lowest level; you write get() or post() yourself. Generic views like ListAPIView or RetrieveAPIView give one CRUD operation each, ready-made. A ViewSet bundles all CRUD actions for a model into one class, meant to be wired up by a router."
+  },
+  {
+    "topic": "DRF",
+    "question": "What does a router do?",
+    "answer": "Automatically generates the standard URL patterns for list, detail, create, update, and delete for a ViewSet, so you do not hand-write urls.py entries for each action."
+  },
+  {
+    "topic": "DRF",
+    "question": "How does authentication vs permissions work in DRF?",
+    "answer": "Authentication answers who is this user, for example token, session, or JWT. Permissions answer is this user allowed to do this, for example IsAuthenticated or IsAdminUser. Authentication runs first, permissions are checked after."
+  },
+  {
+    "topic": "DRF",
+    "question": "How do you handle pagination in DRF?",
+    "answer": "Set a pagination class such as PageNumberPagination, LimitOffsetPagination, or CursorPagination, globally in settings or per view, so large querysets are returned in pages instead of one giant response."
+  },
+  {
+    "topic": "FastAPI",
+    "question": "Explain FastAPI's request/data flow.",
+    "answer": "Client sends a request, FastAPI matches the route, Pydantic validates and parses incoming data, your function runs business logic often calling the DB, then Pydantic serializes the return value back into JSON."
+  },
+  {
+    "topic": "FastAPI",
+    "question": "How does FastAPI / Pydantic validate request data?",
+    "answer": "You define a Pydantic model with typed fields. FastAPI checks incoming JSON against it automatically; wrong types or missing fields return a 422 error before your function code even runs. Remember: Pydantic is a bouncer at the door, bad data never reaches your function."
+  },
+  {
+    "topic": "FastAPI",
+    "question": "What is dependency injection (Depends) in FastAPI?",
+    "answer": "A way to declare shared logic, such as a DB session, auth check, or current user, once and have FastAPI automatically supply it to any route that needs it, keeping route code clean and testable."
+  },
+  {
+    "topic": "FastAPI",
+    "question": "async def vs def endpoints in FastAPI?",
+    "answer": "async def runs on the event loop; use it when calling other async code such as async DB drivers or httpx. Plain def runs in a thread pool automatically, so it is still safe for blocking or sync code like the Django ORM."
+  },
+  {
+    "topic": "FastAPI",
+    "question": "Why choose FastAPI over Django/Flask?",
+    "answer": "Built-in async support, automatic request validation via Pydantic, and auto-generated OpenAPI/Swagger docs with less boilerplate, well suited to high-throughput APIs and microservices."
+  },
+  {
+    "topic": "FastAPI",
+    "question": "Path params vs query params vs body?",
+    "answer": "Path params identify a resource, like /items/{id}. Query params filter or modify a request, like ?limit=10. Body carries structured data for POST or PUT, usually a Pydantic model."
+  },
+  {
+    "topic": "SQL",
+    "question": "What is a SQL transaction?",
+    "answer": "A group of operations treated as one unit; either all succeed with COMMIT or all roll back with ROLLBACK if any step fails. Keeps data consistent."
+  },
+  {
+    "topic": "SQL",
+    "question": "TRUNCATE vs DELETE?",
+    "answer": "DELETE removes rows one by one, can use WHERE, is logged, and can be rolled back. TRUNCATE removes all rows at once, resets auto-increment, is much faster, and cannot be selectively filtered."
+  },
+  {
+    "topic": "SQL",
+    "question": "What is an index and why use one?",
+    "answer": "A separate lookup structure, like a book's index, that lets the database find rows fast without scanning the whole table. Speeds up reads, slightly slows down writes."
+  },
+  {
+    "topic": "SQL",
+    "question": "Explain the different types of JOIN.",
+    "answer": "INNER JOIN returns only matching rows in both tables. LEFT JOIN returns all of the left table plus matches. RIGHT JOIN is the mirror of that. FULL JOIN returns everything from both, matched where possible."
+  },
+  {
+    "topic": "SQL",
+    "question": "Primary key vs foreign key?",
+    "answer": "A primary key uniquely identifies each row in its own table. A foreign key is a column that points to a primary key in another table, linking the two."
+  },
+  {
+    "topic": "SQL",
+    "question": "WHERE vs GROUP BY vs HAVING?",
+    "answer": "WHERE filters individual rows before grouping. GROUP BY buckets rows into groups, for example by category. HAVING filters those groups after aggregation, for example COUNT(*) > 5."
+  },
+  {
+    "topic": "SQL",
+    "question": "What is the N+1 query problem?",
+    "answer": "Fetching a list in one query, then running a separate query per item to get related data, instead of one joined query. Fixed in Django with select_related or prefetch_related."
+  },
+  {
+    "topic": "AWS",
+    "question": "What AWS services did you use, and how do they fit together?",
+    "answer": "Typical setup: EC2 runs the application server, RDS hosts the managed relational database, S3 stores files and media such as images, uploads, and static assets."
+  },
+  {
+    "topic": "AWS",
+    "question": "Where was your application hosted? What is EC2?",
+    "answer": "EC2, Elastic Compute Cloud, is a virtual server in the cloud; you rent a machine with chosen CPU and RAM, install your stack such as Django or FastAPI plus gunicorn or nginx, and it serves requests the same as a physical server would."
+  },
+  {
+    "topic": "AWS",
+    "question": "What exactly did you use S3 for?",
+    "answer": "Object storage for files that do not belong in the database: user uploads, images, PDFs, static or media files, and backups. Cheap, durable, accessed over HTTP rather than a filesystem path."
+  },
+  {
+    "topic": "AWS",
+    "question": "What is RDS?",
+    "answer": "Relational Database Service, a managed database such as Postgres or MySQL. AWS handles backups, patching, and scaling, so you do not run the DB server yourself."
+  },
+  {
+    "topic": "AWS",
+    "question": "What does a load balancer (ELB) do, and what is auto-scaling?",
+    "answer": "A load balancer spreads incoming traffic across multiple EC2 instances so no single server is overwhelmed. Auto-scaling automatically adds or removes instances based on load, keeping cost and performance balanced."
+  },
+  {
+    "topic": "AWS",
+    "question": "S3 vs EBS, what's the difference?",
+    "answer": "S3 is object storage accessed over HTTP, great for files and media, not attached to one server. EBS is a virtual hard drive attached directly to one EC2 instance, used for the OS or app disk itself."
+  },
+  {
+    "topic": "AWS",
+    "question": "What are security groups?",
+    "answer": "A virtual firewall attached to EC2 or RDS that controls which inbound and outbound traffic, by port and source IP, is allowed. For example, only allow port 443 from anywhere, port 5432 only from the app server."
+  }
+]
