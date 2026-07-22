@@ -34,3 +34,15 @@ def embed_text(text: str) -> list[float]:
         ),
     )
     return result.embeddings[0].values
+
+
+def embed_query(text: str) -> list[float]:
+    result = client.models.embed_content(
+        model=EMBED_MODEL,
+        contents=text,
+        config=types.EmbedContentConfig(
+            task_type="retrieval_query",   
+            output_dimensionality=768,
+        ),
+    )
+    return result.embeddings[0].values

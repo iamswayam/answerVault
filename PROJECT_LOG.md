@@ -1,148 +1,58 @@
 # AnswerVault — Project Log
 
 Detailed running history of decisions, issues, and implementation details.
-Kept for personal reference and as real interview material ("tell me about a
-challenge you solved" — several entries below answer that directly).
 
 ---
 
 ## Background / how this project was scoped
 
-Originally planned a resume project (OpsMind AI style: RAG ops-copilot) to be
-built in ~1 week at 6-8 hrs/day. After reflection, decided to build a smaller,
-different-shaped project first — AnswerVault — purely to build deep,
-first-principles understanding of RAG/embeddings/tool calling/agentic AI
-before returning to finish OpsMind with real understanding instead of
-copy-pasted structure.
+Built as a smaller, first-principles learning project (separate from OpsMind
+AI) to deeply understand RAG, embeddings, pgvector, tool calling, and
+agentic AI before returning to finish OpsMind with real understanding.
 
-**Key design decision, locked in early:** unlike typical RAG (retrieve →
-always generate), AnswerVault uses a three-tier confidence branch:
-
-- High similarity match → return the user's own stored answer **verbatim**,
-  straight from the database, no LLM call at all
-- Medium similarity → ask for confirmation ("did you mean...?") before
-  returning a stored answer
-- Low similarity → let Gemini answer freely from general knowledge, no
-  restriction
-
-This came from a real, specific requirement: the user has memorized answers
-for real recurring interview questions and cannot risk the LLM subtly
-rewording/"improving" them. LLMs can't be trusted to reproduce text verbatim
-even under explicit instruction — so the only reliable fix is architectural:
-skip the LLM entirely on a high-confidence match, don't just prompt it to
-behave.
-
-This is a meaningfully different retrieval philosophy from OpsMind (which
-uses a single confidence gate: refuse to answer below a threshold).
-AnswerVault instead branches to a different *source* of the answer depending
-on confidence, never refusing outright.
+**Core design decision, locked in early:** a three-tier confidence branch —
+high similarity match returns the user's own stored answer **verbatim**, no
+LLM call at all; medium similarity asks for confirmation; low similarity
+lets Gemini answer freely from general knowledge. This came from a specific
+real requirement: the user has memorized real interview answers and cannot
+risk an LLM subtly rewording them.
 
 ---
 
 ## Day 1 — FastAPI + Gemini chat with conversation memory
 
-**Goal:** a working `/chat` endpoint where conversation history persists in
-Postgres and Gemini genuinely remembers prior turns within a conversation.
+**Built:** `app/config.py` (env loading), `app/db.py` (`Message` model),
+`app/gemini_client.py` (`generate_reply`, resends full conversation every
+call since LLMs are stateless), `app/main.py` (`/chat` endpoint backed by
+Postgres).
 
-**Built:**
-- `app/config.py` — loads `GEMINI_API_KEY`, `DATABASE_URL` from `.env`
-- `app/db.py` — SQLAlchemy `Message` model (conversation_id, role, content,
-  created_at) + `init_db()`
-- `app/gemini_client.py` — `generate_reply(history)`, resends the full
-  conversation on every call (LLMs are stateless between calls — this is the
-  core mechanic of "memory")
-- `app/main.py` — `/chat` endpoint: loads prior messages for the given
-  `conversation_id` from Postgres, appends the new message, calls Gemini,
-  saves both turns back to the DB
+**Key decision:** Postgres from day 1, not an in-memory dict — an in-memory
+Python variable is lost on restart and inconsistent across multiple server
+processes; Postgres is the single shared source of truth.
 
-**Decision — Postgres from day 1, not an in-memory dict:**
-Originally considered starting with an in-memory Python dict for simplicity,
-then swapping to Postgres later. Skipped that step since Docker + Postgres
-was already available and the user already knows Postgres well from Django.
-Went straight to the DB-backed version.
+**Issue — `gemini-2.5-flash` returned 404** ("no longer available to new
+users"). Fixed by switching to `gemini-3.1-flash-lite`.
 
-**Decision — why history is rebuilt from the DB on every request:**
-An in-memory Python variable only lives in that process's RAM — lost on
-restart, and inconsistent across multiple server processes/workers. Postgres
-is the single shared source of truth. (Same reason Django doesn't keep
-session data in a bare Python variable.)
-
-**Understanding check passed:** confirmed a brand-new `conversation_id`
-correctly has zero memory (empty history from the DB query) — proved
-conversation memory is scoped per-conversation, not global.
-
-**Issue #1 — `gemini-2.5-flash` returned 404:**
-```
-google.api_core.exceptions.NotFound: 404 This model models/gemini-2.5-flash
-is no longer available to new users.
-```
-Fix: switched to `gemini-3.1-flash-lite` (confirmed via web search to be a
-real, current Gemini 3-series model — optimized for low-latency,
-high-volume, cost-sensitive tasks). Noted for later: if answer quality feels
-thin once we reach the free-generation tier (Day 5), consider comparing
-against a non-lite Gemini 3 model.
-
-**Result:** confirmed working — asked "My name is Swayam" then in a follow-up
-message asked "what's my name," got correct recall. Tested a second, fresh
-`conversation_id` and confirmed it correctly had no memory of the name.
+**Result:** confirmed working — multi-turn recall verified, and a fresh
+`conversation_id` correctly showed no memory (proves per-conversation
+scoping).
 
 ---
 
 ## Day 2 — Embeddings + pgvector storage
 
 **Goal:** convert interview Q&A content into vectors and store them in
-Postgres via pgvector — storage only, no search yet.
+pgvector.
 
-**Infra setup:**
-- Docker Compose with `pgvector/pgvector:pg17` image (official image; more
-  current than initially suggested `ankane/pgvector`)
-- `.env` uses `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` vars,
-  referenced in `docker-compose.yml` via `${VAR}` substitution
-- Caught and fixed a mismatch where `DATABASE_URL` had a different password
-  than the actual container env vars — would have caused a silent-looking
-  auth failure at connection time
-- Enabled the extension: `CREATE EXTENSION IF NOT EXISTS vector;`
+**Infra:** Docker Compose with `pgvector/pgvector:pg17`, `CREATE EXTENSION
+IF NOT EXISTS vector;` run inside the container.
 
-**Concept — what an embedding is:**
-A list of numbers (a vector, 768 dimensions here) representing the *meaning*
-of a piece of text. Semantically similar text produces vectors that are close
-together in that 768-dimensional space; unrelated text produces vectors far
-apart. No individual dimension is human-interpretable — only relative
-distance/angle between vectors matters.
+**Source data:** `Backend_Interview_QA.pdf` — ~49 Q&A pairs across Python,
+Django, DRF, FastAPI, SQL, AWS. Manually converted to structured
+`data/qa_seed.json` (topic, question, answer per entry).
 
-**Source data — Backend_Interview_QA.pdf:**
-User provided an existing, well-structured interview prep PDF covering
-Python, Django, DRF, FastAPI, SQL, and AWS (~49 Q&A pairs total).
-
-**Decision — manual JSON conversion vs. building a parser first:**
-Initially converted the PDF content to structured JSON by hand (all 49
-entries, across 6 topics) to avoid learning two new things (parsing +
-embeddings) in the same session. ChatGPT (consulted in parallel) pushed back:
-argued that since the source format is already consistent (`Q:` / `A:`
-blocks), a small parser is realistic to build immediately and is a genuine,
-transferable AI engineering skill (every RAG system needs an ingestion step).
-
-**Resolution:** agreed with ChatGPT's core point, with one adjustment — scope
-the parser to *only* the one text format actually in use (`TOPIC:` / `Q:` /
-`A:` plain text blocks), not a general multi-format (PDF/DOCX/Markdown/CSV)
-ingestion system, which would be real scope creep for this stage. Parser
-(`scripts/parse_qa.py`) written using `re.split` on `TOPIC:` markers, with
-`re.DOTALL` on the answer group only (answers may span multiple lines),
-skipping malformed blocks defensively rather than crashing. The 49 entries
-already hand-converted remain valid; the parser is for future additions to
-the notes.
-
-**Schema decision:**
-ChatGPT also flagged that the plan to add rich metadata (difficulty,
-company, tags, etc.) was premature — nothing in the pipeline would use it
-yet. Agreed: kept `QAEntry` to `topic`, `question`, `answer`, `embedding`
-only. Metadata will be added later, only once a real feature (e.g. filtering
-retrieval by topic or difficulty) needs it.
-
-**Code — `app/db.py` addition:**
+**Schema (kept intentionally minimal):**
 ```python
-from pgvector.sqlalchemy import Vector
-
 class QAEntry(Base):
     __tablename__ = "qa_entries"
     id = Column(Integer, primary_key=True)
@@ -151,72 +61,250 @@ class QAEntry(Base):
     answer = Column(String, nullable=False)
     embedding = Column(Vector(768), nullable=False)
 ```
+No `difficulty`/`company`/`tags` yet — deferred until a real feature needs
+them (e.g. filtering retrieval by topic).
 
-**Code — `scripts/ingest_qa.py`:**
-Loads `data/qa_seed.json`, embeds `question + answer` together (not question
-alone — gives the vector more context, so a differently-phrased search query
-still matches), stores each as a `QAEntry` row. Run via
-`python -m scripts.ingest_qa` (module form, so `app` package imports resolve
-correctly).
+**Ingestion (`scripts/ingest_qa.py`):** embeds `question + answer` together
+(not question alone, so a differently-phrased search query still matches),
+stores each as a `QAEntry` row.
 
-**Issue #2 — embedding model deprecated:**
-Originally planned to use `text-embedding-004`. Web search confirmed it was
-**shut down January 14, 2026**. Switched to `gemini-embedding-001`.
+**Issue — embedding model deprecated:** `text-embedding-004` was shut down
+January 14, 2026. Switched to `gemini-embedding-001`.
 
-**Issue #3 — embedding dimension mismatch:**
-`gemini-embedding-001` defaults to **3072** dimensions, not 768. Had to
-explicitly pass `output_dimensionality=768` in the embed call to match the
-`Vector(768)` column (768 chosen as the standard "good quality, reasonable
-storage cost" tier per Google's own guidance, and matches what OpsMind AI's
-build already established as sufficient).
+**Issue — dimension mismatch:** `gemini-embedding-001` defaults to 3072
+dimensions, not 768. Fixed with `output_dimensionality=768` in the embed
+call.
 
-**Result:** ingestion ran successfully — "Ingested 49 entries." confirmed in
-Postgres.
+**Issue — SDK fully deprecated mid-build:** `google.generativeai` was
+retired in favor of `google.genai`. Migrated `generate_reply()` and
+`embed_text()`. Old SDK used a stateful `start_chat()`/`send_message()`
+pattern; new SDK is fully stateless — the whole conversation is passed as
+`contents` every call, which makes the "AI has no memory between calls"
+lesson from Day 1 explicit in the code itself.
 
-**Issue #4 — SDK fully deprecated mid-build:**
-Running the (working) ingestion script surfaced:
-```
-FutureWarning: All support for the `google.generativeai` package has ended.
-Please switch to the `google.genai` package as soon as possible.
-```
-Investigated via web search — confirmed `google.generativeai` is fully
-legacy (limited/no further updates). Migrated both `generate_reply()` and
-`embed_text()` in `gemini_client.py` to the new `google.genai` SDK:
+**Result:** 49 entries ingested successfully, confirmed in pgvector. `/chat`
+re-tested and confirmed working under the new SDK (correct multi-turn
+reasoning, not just echoing).
 
-- Old: implicit global config via `genai.configure()`, stateful
-  `GenerativeModel` + `start_chat()`/`send_message()` objects
-- New: explicit `genai.Client(api_key=...)` object, fully stateless
-  `client.models.generate_content(model=..., contents=[...])` — the entire
-  conversation is passed as `contents` every call, no hidden chat-session
-  state. This actually makes the "no memory between calls" fact from Day 1
-  more explicit in the code, not less.
-- Embedding response shape changed: `result["embedding"]` (dict-style, old
-  SDK) → `result.embeddings[0].values` (typed object, list of embeddings,
-  new SDK)
-
-**Result after migration:** re-ran ingestion (clean, no warning), then
-re-tested `/chat` — conversation memory still works correctly under the new
-SDK. Verified with a genuine reasoning test (asked "which month does Swayam
-celebrate his birthday" after stating a DOB earlier — correct answer,
-confirms the model is using stored context, not just echoing).
+**This is the current stable baseline.** Tagged in git as `day-2-complete`.
 
 ---
 
-## Day 3 — Similarity search (planned, not yet built)
+## Detour: Production-Pipeline Exploration (explored, then reverted)
 
-**Scope decision (via ChatGPT review, adopted):** originally planned to
-combine similarity search and full RAG generation into one day. Split into
-two separate days instead:
+After Day 2, the project's learning philosophy was temporarily redirected
+toward building a full production-style document ingestion pipeline (PDF
+upload → extraction → cleaning → chunking → embedding → storage →
+retrieval), on the reasoning that the Day 2 approach (hand-converting a PDF
+to JSON) was a shortcut that skipped real ingestion engineering.
 
-- Day 3: prove vector search alone can retrieve the correct answer — print
-  top match, its similarity score, and the raw stored answer. **No Gemini
-  call involved at this stage.**
-- Day 5: only then reintroduce Gemini for the low-confidence / general
-  knowledge path.
+This was later reverted via `git reset --hard` + `git clean -fd` back to
+the `day-2-complete` tag, on the decision to keep AnswerVault's original
+scope (learn RAG/agent concepts end-to-end without getting stuck for
+multiple days on ingestion engineering specifically) and study the
+production-ingestion pipeline as a **separate, dedicated learning track**
+later, rather than folding it into this project's main path.
 
-Rationale: testing retrieval and generation together hides two independent
-failure modes behind one pass/fail signal. Verifying the deterministic
-retrieval layer first, before adding the probabilistic LLM layer on top,
-makes debugging and understanding each piece far cleaner.
+**The code no longer exists on disk**, but the concepts covered were real
+and correctly understood before the revert. Recorded here so nothing is
+lost and this can be picked up as standalone study material.
 
-*(To be filled in once Day 3 is actually built.)*
+### What was built and verified during the detour
+
+**1. Document upload endpoint**
+A `POST /documents/upload` endpoint accepting a PDF via FastAPI's
+`UploadFile`, saving it to local disk, and storing metadata (filename,
+file path, size, status) in a new `Document` table — proven working
+end-to-end against a real 172KB PDF.
+
+Key lesson: databases are bad at storing large binary blobs efficiently;
+real systems store files on disk or object storage (S3) and keep only a
+*reference* in the database.
+
+**2. PDF text extraction with PyMuPDF**
+`fitz.open(file_path)` + `page.get_text()`, page markers inserted for
+future source attribution. Chosen over `pypdf` for speed (C-based under the
+hood) and better handling of complex layouts — a genuine production-grade
+choice, not an arbitrary pick.
+
+**Real, evidence-based finding:** extraction worked near-perfectly for
+prose, section headers, bullet lists, and even multi-line Python code
+blocks (indentation, comments, and nested brackets all survived intact).
+It broke specifically on 2D ASCII box-drawing diagrams — PyMuPDF extracts
+in reading-order (left-to-right, top-to-bottom), which has no way to
+represent a diagram's actual 2D spatial structure. Also observed a code
+block getting split across a page boundary, mid-function — a concrete,
+evidence-based reason to chunk by content size/structure later, not by
+page.
+
+**3. Text cleaning — a real debugged heuristic**
+Built `remove_diagrams()`, `fix_bullet_points()`, `normalize_whitespace()`.
+
+The first version of diagram detection scored each line individually by
+box-character density (`box_chars / line_length`). It failed silently on
+lines with a diagram border character plus lots of interior padding/spaces
+(e.g. a centered label inside a box) — the padding diluted the ratio below
+threshold, so those lines were wrongly kept.
+
+**The fix:** switched from a per-line score to a stateful approach —
+enter "diagram mode" when a line has 3+ box-drawing characters, stay in
+that mode (skipping every line) until a line with zero box characters and
+4+ real letters appears (genuine prose), which signals the diagram has
+ended. Verified against the real E-Z Auto PDF: the full architecture
+diagram correctly collapsed to a single `[DIAGRAM REMOVED]` marker, with
+prose resuming cleanly right after.
+
+This is a genuinely good, real debugging story: a heuristic that looked
+reasonable, failed on real data, was diagnosed correctly (padding diluting
+a ratio-based score), and was fixed with a different algorithmic approach
+(state machine instead of per-line scoring) rather than a patch.
+
+**4. Architecture refactor — routers / services / models**
+Restructured from a flat `main.py` into:
+```
+app/
+  db.py            # engine, session, Base, get_db(), init_db() only
+  models/           # Message, Document + DocumentStatus enum, one file each
+  routers/           # chat.py, documents.py — HTTP layer only
+  services/            # documents/upload.py — business logic, no FastAPI imports
+```
+Key lessons genuinely internalized, worth remembering even without the code:
+- **Dependency injection for DB sessions** (`Depends(get_db)`) — a service
+  receiving a session as a parameter (not creating its own) can be called
+  from a test, script, cron job, or agent tool, not just a live HTTP
+  request.
+- **Routers vs. services separation** — a router only knows about HTTP; a
+  service has zero FastAPI imports and doesn't know it's being called from
+  an endpoint. This matters directly for later phases like tool calling and
+  agentic loops, where the same logic needs to be called without going
+  through HTTP at all.
+- **`str, Enum` for status fields** (`class DocumentStatus(str, Enum)`) —
+  prevents typos like `"uploded"` silently entering the database, and
+  serializes cleanly as a plain string in JSON responses.
+- This refactor was verified correct via a structured Codex review against
+  an explicit target spec (10 checks: folder structure, DI consistency,
+  no models in `db.py`, no manual `SessionLocal()` calls outside `db.py`,
+  etc.) — all checks passed before the revert.
+
+### Why it was reverted
+
+Two compounding reasons, not one:
+1. **Pacing** — going this deep on ingestion engineering (upload, PyMuPDF,
+   cleaning heuristics, a full architectural refactor) was taking multiple
+   real days for what was meant to be a supporting phase, not the main
+   subject of AnswerVault.
+2. **Chunking was next**, and doing it with the same exhaustive rigor
+   (character vs. token-based, overlap tuning, comparing strategies)
+   threatened to add several more days before AnswerVault's actual core
+   goal (RAG confidence tiers, memory, tool calling, agentic loop) was even
+   reached.
+
+**Decision:** treat "production-grade document ingestion" (upload → extract
+→ clean → chunk → embed) as its own **separate, dedicated learning topic**
+to study later — not abandoned, just decoupled from AnswerVault's timeline.
+AnswerVault resumes from the `day-2-complete` baseline and continues with
+its original plan: similarity search → confidence tiers → RAG → memory →
+tools → agentic loop, using the already-embedded 49 Q&A entries.
+
+### Parked knowledge — to revisit as a separate study track later
+
+- Chunking strategies: character-based vs. token-based, chunk size and
+  overlap tuning, recursive/semantic chunking, why naive chunking splits
+  meaning apart
+- Full production ingestion pipeline for arbitrary file types (PDF, DOCX,
+  HTML, Markdown), not just one clean PDF format
+- Async ingestion / background jobs (Celery, task queues) for
+  extraction+chunking+embedding at scale, instead of synchronous request
+  handling
+- Metadata filtering, hybrid search (vector + keyword), and re-ranking as
+  retrieval quality improvements
+- Revisiting whether/how to reintroduce the routers/services/models
+  architecture once AnswerVault's core feature set (through agentic loop)
+  is complete and the codebase has genuinely outgrown a flat structure
+
+---
+
+## Day 3 — Similarity search (resuming original plan)
+
+**Scope decision (unchanged from before the detour):** similarity search
+and full RAG generation kept as separate days. Day 3 proves vector search
+alone can retrieve the correct answer — no Gemini generation call involved,
+only embedding the query and searching.
+
+**Built:**
+- `embed_query()` in `app/gemini_client.py` — embeds the incoming question
+  using `task_type="retrieval_query"`, deliberately different from the
+  `"retrieval_document"` type used when the Q&A entries were originally
+  embedded on Day 2. Gemini optimizes the vector differently depending on
+  which side of a search it's playing; matching the type on both sides
+  improves match quality.
+- `scripts/search_qa.py` — embeds a query, runs a cosine-distance search
+  against `qa_entries` via pgvector's `.cosine_distance()` method (wraps
+  the underlying `<=>` SQL operator), returns top-K ranked results with
+  similarity scores (`1 - distance`, for readable "higher = better"
+  numbers).
+
+**Issue — duplicate rows found:** first test run returned the exact same
+entry twice with an identical similarity score. Root cause: `ingest_qa.py`
+has no duplicate-check, and it had been run more than once across the
+original build and the detour/revert cycle, doubling the table (49 → 98
+rows). Fixed by truncating `qa_entries` and re-ingesting once
+(`TRUNCATE TABLE qa_entries;` then `python -m scripts.ingest_qa`), restoring
+exactly 49 rows. Noted as a real gap: production ingestion scripts need
+either an upsert/dedupe strategy or a check for existing rows before
+insert — not built here, since a single manual re-ingest was enough for
+this project's needs.
+
+**Threshold calibration — real evidence overturned the original guess.**
+Ran five deliberately varied test queries against the real embedded data:
+
+| Query | Top match | Similarity |
+|---|---|---|
+| "Iterators vs generators?" (exact stored question) | Iterators vs generators? | 0.772 |
+| "Explain generators in Python" (paraphrase) | Iterators vs generators? | 0.741 |
+| "select_related vs prefetch_related?" (paraphrase) | select_related vs prefetch_related? | 0.809 |
+| "How do I center a div in CSS" (unrelated) | (best of unrelated junk) | 0.527 |
+| "Tell me about the GIL" (casual phrasing) | What is the GIL? | 0.767 |
+
+**Key finding:** even an exact, word-for-word question match only reached
+0.772–0.809 similarity — nowhere near the originally planned 0.90 "high
+confidence" threshold. Gemini's embedding space doesn't spread scores as
+widely as intuition suggests; shipping the original threshold would have
+meant the system could *never* return a verbatim stored answer, silently
+defeating the project's core purpose.
+
+**Also found:** a real near-miss case. Query 3's correct answer scored
+0.809, but a related-but-wrong entry (N+1 query problem) scored 0.735 —
+uncomfortably close to query 2's *correct* match score of 0.741. A single
+global threshold cannot cleanly separate "right answer" from "closely
+related wrong answer" in this zone. This is concrete evidence that the
+medium-confidence "did you mean...?" tier is doing real, necessary work,
+not just a nice-to-have safety net.
+
+**Revised thresholds, set from evidence rather than guessed:**
+```
+HIGH   (> 0.75)          → return stored answer verbatim, no LLM
+MEDIUM (0.60 – 0.75)      → ask "did you mean...?" confirmation
+LOW    (< 0.60)            → Gemini answers from general knowledge
+```
+0.60 sits comfortably above the unrelated-content ceiling (0.527); 0.75
+sits at the boundary where genuine correct matches cluster, correctly
+routing the tricky 0.735 distractor into confirmation rather than falsely
+auto-returning it as verbatim truth.
+
+**Housekeeping:** temporary debugging script `scripts/check_duplicates.py`
+(used only to confirm the duplicate-row count) deleted after the fix was
+verified — not part of the ongoing project, per the standing rule that
+one-off diagnostic scripts get removed once their job is done.
+`scripts/search_qa.py` was kept, since it's a real, reusable project
+capability (the foundation of Day 4's retrieval layer), not scaffolding.
+
+**Result:** Day 3 complete. Real similarity search working against real
+data, with thresholds grounded in actual evidence rather than assumption —
+directly ready to feed into Day 4's confidence-tier branching logic.
+
+---
+
+## Day 4 — Confidence-tier branching (planned)
+
+*(To be filled in once built.)*
