@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AnswerVault</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #171922;
+    --border: #2a2d3a;
+    --text: #e6e6ea;
+    --text-dim: #8b8d98;
+    --accent: #6366F1;
+    --accent-dim: #4338CA;
+    --green: #34D399;
+    --green-bg: #0f2419;
+    --orange: #FB923C;
+    --orange-bg: #241a0f;
+    --blue: #818CF8;
+    --blue-bg: #14162a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", sans-serif;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 32px 20px 100px;
+    background: var(--bg);
+    color: var(--text);
+  }
+  h1 { font-size: 19px; font-weight: 600; margin: 0 0 2px; }
+  .subtitle { color: var(--text-dim); font-size: 13px; margin-bottom: 28px; }
+
+  #messages { display: flex; flex-direction: column; gap: 16px; margin-bottom: 90px; }
+  .msg {
+    padding: 14px 18px;
+    border-radius: 14px;
+    max-width: 82%;
+    white-space: pre-wrap;
+    line-height: 1.5;
+    font-size: 14.5px;
+  }
+  .user {
+    background: var(--accent-dim);
+    color: white;
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+  }
+  .bot {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+  }
+
+  .tag {
+    display: inline-block;
+    font-size: 10.5px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    margin-bottom: 8px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  .tag-high  { background: var(--green-bg);  color: var(--green); }
+  .tag-medium{ background: var(--orange-bg); color: var(--orange); }
+  .tag-low   { background: var(--blue-bg);   color: var(--blue); }
+
+  form {
+    display: flex;
+    gap: 10px;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 18px 20px;
+    background: linear-gradient(to top, var(--bg) 60%, transparent);
+  }
+  input {
+    flex: 1;
+    padding: 13px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  input::placeholder { color: var(--text-dim); }
+  button {
+    padding: 13px 22px;
+    border-radius: 10px;
+    border: none;
+    background: var(--accent);
+    color: white;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  button:hover { background: var(--accent-dim); }
+  button:disabled { opacity: 0.5; cursor: default; }
+
+  .msg button {
+    padding: 7px 14px;
+    margin: 6px 8px 0 0;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #1e2030;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .msg button:hover { background: #262940; border-color: var(--accent); }
+
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+</style>
+</head>
+<body>
+  <h1>AnswerVault</h1>
+  <div class="subtitle">Your interview prep assistant</div>
+  <div id="messages"></div>
+  <form id="chat-form">
+    <input id="input" placeholder="Ask an interview question..." autocomplete="off" />
+    <button type="submit">Send</button>
+  </form>
+
+<script>
+const CONVERSATION_ID = crypto.randomUUID();
+
+const form = document.getElementById("chat-form");
+const input = document.getElementById("input");
+const messages = document.getElementById("messages");
+
+function addMessage(text, className, tagHTML = "") {
+  const div = document.createElement("div");
+  div.className = "msg " + className;
+  div.innerHTML = tagHTML + (tagHTML ? "<br>" : "") + text;
+  messages.appendChild(div);
+  window.scrollTo(0, document.body.scrollHeight);
+  return div;
+}
+
+function renderSuggestion(data) {
+  const div = document.createElement("div");
+  div.className = "msg bot";
+  div.innerHTML = `
+    <div class="tag tag-medium">Suggestion &middot; sim ${data.similarity}</div>
+    I'm not fully confident, but is this what you meant?<br><br>
+    <b>"${data.matched_question}"</b><br><br>
+    <button class="confirm-yes">Yes, show me</button>
+    <button class="confirm-no">No, general answer</button>
+  `;
+  messages.appendChild(div);
+  window.scrollTo(0, document.body.scrollHeight);
+
+  div.querySelector(".confirm-yes").addEventListener("click", async () => {
+    div.remove();
+    addMessage(data.matched_answer, "bot", `<div class="tag tag-high">Your documents &middot; confirmed</div>`);
+    try {
+      await fetch("/ask/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversation_id: CONVERSATION_ID,
+          matched_answer: data.matched_answer,
+        }),
+      });
+    } catch (err) {}
+  });
+
+  div.querySelector(".confirm-no").addEventListener("click", async () => {
+    div.remove();
+    const thinking = addMessage("Thinking...", "bot");
+    try {
+      const res = await fetch("/ask/general", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversation_id: CONVERSATION_ID,
+          message: data.original_query,
+        }),
+      });
+      const genData = await res.json();
+      thinking.remove();
+      addMessage(genData.answer, "bot", `<div class="tag tag-low">General knowledge</div>`);
+    } catch (err) {
+      thinking.remove();
+      addMessage("Error reaching the server.", "bot");
+    }
+  });
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const question = input.value.trim();
+  if (!question) return;
+
+  addMessage(question, "user");
+  input.value = "";
+  input.disabled = true;
+
+  try {
+    const res = await fetch("/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversation_id: CONVERSATION_ID,
+        message: question,
+      }),
+    });
+    const data = await res.json();
+
+    if (data.confidence === "medium") {
+      renderSuggestion(data);
+    } else {
+      const tagClass = "tag-" + data.confidence;
+      const labelMap = { your_documents: "Your documents", general_knowledge: "General knowledge" };
+      const tagText = labelMap[data.source] || data.source.replaceAll("_", " ");
+      const tagHTML = `<div class="tag ${tagClass}">${tagText} &middot; sim ${data.similarity}</div>`;
+      const bubble = addMessage(data.answer, "bot", tagHTML);
+
+      // Escape hatch: if the matched answer wasn't actually what they
+      // wanted, let them bypass search entirely and get a real general
+      // answer to their ORIGINAL question -- no guessing intent from text.
+      if (data.confidence === "high") {
+        const btn = document.createElement("button");
+        btn.textContent = "Not what you wanted? Get a general answer";
+        btn.style.display = "block";
+        btn.style.marginTop = "10px";
+        bubble.appendChild(btn);
+
+        btn.addEventListener("click", async () => {
+          btn.remove();
+          const thinking = addMessage("Thinking...", "bot");
+          try {
+            const res = await fetch("/ask/general", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ conversation_id: CONVERSATION_ID, message: question }),
+            });
+            const genData = await res.json();
+            thinking.remove();
+            addMessage(genData.answer, "bot", `<div class="tag tag-low">General knowledge</div>`);
+          } catch (err) {
+            thinking.remove();
+            addMessage("Error reaching the server.", "bot");
+          }
+        });
+      }
+    }
+  } catch (err) {
+    addMessage("Error reaching the server.", "bot");
+  } finally {
+    input.disabled = false;
+    input.focus();
+  }
+});
+</script>
+</body>
+</html>

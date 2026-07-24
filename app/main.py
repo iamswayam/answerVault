@@ -3,9 +3,15 @@ from pydantic import BaseModel
 from app.db import SessionLocal, Message, init_db
 from app.gemini_client import generate_reply
 
+from fastapi.staticfiles import StaticFiles
+from app.routers import qa
+# ...
+
 app = FastAPI()
 init_db()  # creates the messages table on startup if it doesn't exist
 
+app.include_router(qa.router)
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 class ChatRequest(BaseModel):
     conversation_id: str
