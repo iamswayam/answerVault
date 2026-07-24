@@ -46,3 +46,15 @@ def embed_query(text: str) -> list[float]:
         ),
     )
     return result.embeddings[0].values
+
+
+def generate_free_answer(query_text: str) -> str:
+    """Stateless, single-turn answer from general knowledge. Used only
+    for the LOW confidence tier — no conversation history involved."""
+    response = client.models.generate_content(
+        model=CHAT_MODEL,
+        contents=[
+            types.Content(role="user", parts=[types.Part.from_text(text=query_text)])
+        ],
+    )
+    return response.text
