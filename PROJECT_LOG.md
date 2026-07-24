@@ -154,57 +154,24 @@ ended. Verified against the real E-Z Auto PDF: the full architecture
 diagram correctly collapsed to a single `[DIAGRAM REMOVED]` marker, with
 prose resuming cleanly right after.
 
-This is a genuinely good, real debugging story: a heuristic that looked
-reasonable, failed on real data, was diagnosed correctly (padding diluting
-a ratio-based score), and was fixed with a different algorithmic approach
-(state machine instead of per-line scoring) rather than a patch.
-
 **4. Architecture refactor — routers / services / models**
-Restructured from a flat `main.py` into:
-```
-app/
-  db.py            # engine, session, Base, get_db(), init_db() only
-  models/           # Message, Document + DocumentStatus enum, one file each
-  routers/           # chat.py, documents.py — HTTP layer only
-  services/            # documents/upload.py — business logic, no FastAPI imports
-```
-Key lessons genuinely internalized, worth remembering even without the code:
-- **Dependency injection for DB sessions** (`Depends(get_db)`) — a service
-  receiving a session as a parameter (not creating its own) can be called
-  from a test, script, cron job, or agent tool, not just a live HTTP
-  request.
-- **Routers vs. services separation** — a router only knows about HTTP; a
-  service has zero FastAPI imports and doesn't know it's being called from
-  an endpoint. This matters directly for later phases like tool calling and
-  agentic loops, where the same logic needs to be called without going
-  through HTTP at all.
-- **`str, Enum` for status fields** (`class DocumentStatus(str, Enum)`) —
-  prevents typos like `"uploded"` silently entering the database, and
-  serializes cleanly as a plain string in JSON responses.
-- This refactor was verified correct via a structured Codex review against
-  an explicit target spec (10 checks: folder structure, DI consistency,
-  no models in `db.py`, no manual `SessionLocal()` calls outside `db.py`,
-  etc.) — all checks passed before the revert.
+Restructured from a flat `main.py` into a routers/services/models split
+with proper dependency injection (`Depends(get_db)`) and `str, Enum`
+status fields. Verified correct via a structured Codex review against an
+explicit target spec before the revert.
 
 ### Why it was reverted
 
-Two compounding reasons, not one:
-1. **Pacing** — going this deep on ingestion engineering (upload, PyMuPDF,
-   cleaning heuristics, a full architectural refactor) was taking multiple
-   real days for what was meant to be a supporting phase, not the main
-   subject of AnswerVault.
-2. **Chunking was next**, and doing it with the same exhaustive rigor
-   (character vs. token-based, overlap tuning, comparing strategies)
-   threatened to add several more days before AnswerVault's actual core
-   goal (RAG confidence tiers, memory, tool calling, agentic loop) was even
-   reached.
+Two compounding reasons: (1) pacing — ingestion engineering was taking
+multiple real days for what was meant to be a supporting phase, and (2)
+chunking was next, and doing it with the same exhaustive rigor threatened
+to add several more days before AnswerVault's actual core goal (RAG
+confidence tiers, memory, tool calling, agentic loop) was even reached.
 
-**Decision:** treat "production-grade document ingestion" (upload → extract
-→ clean → chunk → embed) as its own **separate, dedicated learning topic**
-to study later — not abandoned, just decoupled from AnswerVault's timeline.
-AnswerVault resumes from the `day-2-complete` baseline and continues with
-its original plan: similarity search → confidence tiers → RAG → memory →
-tools → agentic loop, using the already-embedded 49 Q&A entries.
+**Decision:** treat "production-grade document ingestion" as its own
+**separate, dedicated learning topic** to study later — not abandoned,
+just decoupled from AnswerVault's timeline. AnswerVault resumed from the
+`day-2-complete` baseline.
 
 ### Parked knowledge — to revisit as a separate study track later
 
@@ -213,98 +180,204 @@ tools → agentic loop, using the already-embedded 49 Q&A entries.
   meaning apart
 - Full production ingestion pipeline for arbitrary file types (PDF, DOCX,
   HTML, Markdown), not just one clean PDF format
-- Async ingestion / background jobs (Celery, task queues) for
-  extraction+chunking+embedding at scale, instead of synchronous request
-  handling
-- Metadata filtering, hybrid search (vector + keyword), and re-ranking as
-  retrieval quality improvements
-- Revisiting whether/how to reintroduce the routers/services/models
-  architecture once AnswerVault's core feature set (through agentic loop)
-  is complete and the codebase has genuinely outgrown a flat structure
+- Async ingestion / background jobs (Celery, task queues)
+- Metadata filtering, hybrid search (vector + keyword), and re-ranking
+- Revisiting the routers/services/models architecture once AnswerVault's
+  core feature set is complete and the codebase has genuinely outgrown a
+  flat structure
 
 ---
 
 ## Day 3 — Similarity search (resuming original plan)
 
-**Scope decision (unchanged from before the detour):** similarity search
-and full RAG generation kept as separate days. Day 3 proves vector search
-alone can retrieve the correct answer — no Gemini generation call involved,
-only embedding the query and searching.
-
 **Built:**
 - `embed_query()` in `app/gemini_client.py` — embeds the incoming question
   using `task_type="retrieval_query"`, deliberately different from the
-  `"retrieval_document"` type used when the Q&A entries were originally
-  embedded on Day 2. Gemini optimizes the vector differently depending on
-  which side of a search it's playing; matching the type on both sides
-  improves match quality.
-- `scripts/search_qa.py` — embeds a query, runs a cosine-distance search
-  against `qa_entries` via pgvector's `.cosine_distance()` method (wraps
-  the underlying `<=>` SQL operator), returns top-K ranked results with
-  similarity scores (`1 - distance`, for readable "higher = better"
-  numbers).
+  `"retrieval_document"` type used for stored entries.
+- `scripts/search_qa.py` — cosine-distance search against `qa_entries` via
+  pgvector's `.cosine_distance()`, returns top-K ranked results.
 
-**Issue — duplicate rows found:** first test run returned the exact same
-entry twice with an identical similarity score. Root cause: `ingest_qa.py`
-has no duplicate-check, and it had been run more than once across the
-original build and the detour/revert cycle, doubling the table (49 → 98
-rows). Fixed by truncating `qa_entries` and re-ingesting once
-(`TRUNCATE TABLE qa_entries;` then `python -m scripts.ingest_qa`), restoring
-exactly 49 rows. Noted as a real gap: production ingestion scripts need
-either an upsert/dedupe strategy or a check for existing rows before
-insert — not built here, since a single manual re-ingest was enough for
-this project's needs.
+**Issue — duplicate rows found:** `ingest_qa.py` had been run more than
+once across the original build and the detour/revert cycle, doubling the
+table (49 → 98 rows). Fixed by truncating and re-ingesting once.
 
 **Threshold calibration — real evidence overturned the original guess.**
-Ran five deliberately varied test queries against the real embedded data:
+Five test queries against real embedded data showed even an exact
+word-for-word question match only reached 0.772–0.809 similarity — nowhere
+near the originally planned 0.90 "high confidence" threshold. Also found a
+real near-miss: a correct match (0.741) and a related-but-wrong match
+(0.735) landed uncomfortably close together, concrete evidence the
+medium-confidence tier is doing real, necessary work.
 
-| Query | Top match | Similarity |
-|---|---|---|
-| "Iterators vs generators?" (exact stored question) | Iterators vs generators? | 0.772 |
-| "Explain generators in Python" (paraphrase) | Iterators vs generators? | 0.741 |
-| "select_related vs prefetch_related?" (paraphrase) | select_related vs prefetch_related? | 0.809 |
-| "How do I center a div in CSS" (unrelated) | (best of unrelated junk) | 0.527 |
-| "Tell me about the GIL" (casual phrasing) | What is the GIL? | 0.767 |
-
-**Key finding:** even an exact, word-for-word question match only reached
-0.772–0.809 similarity — nowhere near the originally planned 0.90 "high
-confidence" threshold. Gemini's embedding space doesn't spread scores as
-widely as intuition suggests; shipping the original threshold would have
-meant the system could *never* return a verbatim stored answer, silently
-defeating the project's core purpose.
-
-**Also found:** a real near-miss case. Query 3's correct answer scored
-0.809, but a related-but-wrong entry (N+1 query problem) scored 0.735 —
-uncomfortably close to query 2's *correct* match score of 0.741. A single
-global threshold cannot cleanly separate "right answer" from "closely
-related wrong answer" in this zone. This is concrete evidence that the
-medium-confidence "did you mean...?" tier is doing real, necessary work,
-not just a nice-to-have safety net.
-
-**Revised thresholds, set from evidence rather than guessed:**
+**Revised thresholds, set from evidence:**
 ```
-HIGH   (> 0.75)          → return stored answer verbatim, no LLM
-MEDIUM (0.60 – 0.75)      → ask "did you mean...?" confirmation
-LOW    (< 0.60)            → Gemini answers from general knowledge
+HIGH   (> 0.75)   → return stored answer verbatim, no LLM
+MEDIUM (0.60–0.75) → ask "did you mean...?" confirmation
+LOW    (< 0.60)     → Gemini answers from general knowledge
 ```
-0.60 sits comfortably above the unrelated-content ceiling (0.527); 0.75
-sits at the boundary where genuine correct matches cluster, correctly
-routing the tricky 0.735 distractor into confirmation rather than falsely
-auto-returning it as verbatim truth.
 
-**Housekeeping:** temporary debugging script `scripts/check_duplicates.py`
-(used only to confirm the duplicate-row count) deleted after the fix was
-verified — not part of the ongoing project, per the standing rule that
-one-off diagnostic scripts get removed once their job is done.
-`scripts/search_qa.py` was kept, since it's a real, reusable project
-capability (the foundation of Day 4's retrieval layer), not scaffolding.
-
-**Result:** Day 3 complete. Real similarity search working against real
-data, with thresholds grounded in actual evidence rather than assumption —
-directly ready to feed into Day 4's confidence-tier branching logic.
+**Result:** Day 3 complete. Tagged `day-3-complete`.
 
 ---
 
-## Day 4 — Confidence-tier branching (planned)
+## Day 4 — Confidence-tier branching
 
-*(To be filled in once built.)*
+**Built:** `answer_query()` (originally `retrieve_answer()`) in
+`app/services/retrieval.py` — takes a query, searches, and branches into
+HIGH/MEDIUM/LOW based on Day 3's calibrated thresholds.
+
+**Testing — 11 real queries across all three tiers,** including two
+deliberate stress tests:
+- Re-tested the Day 3 near-miss ("What is the N+1 query problem?") —
+  correctly resolved HIGH to its own entry (0.814), not the
+  select_related distractor.
+- Two genuinely ambiguous queries ("database query optimization
+  techniques", "how does python manage memory") correctly triggered
+  MEDIUM rather than falsely claiming HIGH confidence.
+
+**Result:** Day 4 complete. Branching logic proven against real, varied
+evidence, not just happy-path queries. Tagged `day-4-complete`.
+
+---
+
+## Day 5 — Full RAG: MEDIUM/LOW wiring, frontend, and conversation memory
+### (in progress — functional but not yet reliable; see Known Issues)
+
+This day expanded far beyond the original scope (wire LOW to Gemini, add
+source labels) into a real, iteratively-debugged RAG interface. Documenting
+the full arc, not just the end state, since the debugging *is* the
+learning here.
+
+### MEDIUM-tier design debate — verbatim guarantee vs. clean UX
+
+Initial plan (ChatGPT-suggested): feed the stored answer into Gemini as
+"evidence" and let it synthesize one grounded response for MEDIUM. Rejected
+— this would let Gemini paraphrase a stored answer, directly violating the
+project's founding requirement that memorized answers are never reworded
+by an LLM, at any confidence tier.
+
+**Resolution:** hardcoded (not Gemini-generated) framing sentence prepended
+to the verbatim stored answer, e.g. "I'm not fully confident, but the
+closest match is about X — here's that answer:". Verbatim guarantee stays
+architectural (the stored answer text is only ever f-string concatenated,
+never passed through any Gemini call) while still giving a coherent,
+non-jarring response instead of two disconnected blocks.
+
+### MEDIUM redesigned again — suggestion + explicit confirmation
+
+The hardcoded-framing version still auto-displayed the full stored answer
+even when the match was a genuine stretch (e.g. "how does python manage
+memory" → Multithreading vs multiprocessing, 0.648). Redesigned so MEDIUM
+returns a **suggestion only**; the frontend shows a "did you mean X?" card
+with Yes/No buttons, and the full answer is only revealed if the user
+confirms. `/ask/confirm` persists an accepted suggestion to conversation
+history.
+
+### Frontend built
+
+`static/index.html`, served via FastAPI `StaticFiles` mounted at `/`
+(after routers, so it doesn't shadow API routes). Plain HTML/CSS/JS, no
+build step, no framework — same-origin with the API so no CORS setup
+needed. Dark theme, chat-bubble UI, color-coded confidence tags.
+
+New endpoints in `app/routers/qa.py`: `POST /ask` (wraps `answer_query()`),
+`POST /ask/general` (LOW-style Gemini fallback, used both for genuine LOW
+results and for the MEDIUM "No" button), `POST /ask/confirm` (persists a
+confirmed MEDIUM suggestion to history).
+
+### Bug — /ask had no conversation memory at all
+
+`/ask` originally ran fully isolated per request — no `conversation_id`,
+no persistence, unrelated to the `/chat` endpoint's memory. Follow-up
+questions ("now show me one that measures time") only worked by accident
+when they happened to repeat enough keywords from the original question.
+
+**Fix:** `/ask` now takes a `conversation_id`, saves every exchange to the
+same `messages` table `/chat` uses, and `generate_free_answer()` was
+changed to accept full history (not a single isolated string) plus a
+`system_instruction` steering it toward short, plain-English,
+interview-flashcard-style answers instead of a generic verbose default.
+
+### Bug — ambiguous follow-ups broke vector search specifically
+
+Even with conversation memory added to *generation*, **vector search itself
+still only ever embedded the current message alone.** Real failure
+observed: after discussing "Django vs Flask vs FastAPI" (correctly HIGH,
+0.793), asking "I asked difference?" embedded only those three words,
+matched an unrelated stored entry (`is` vs `==`, because it contains the
+word "difference") at HIGH confidence, and confidently returned the wrong
+answer.
+
+**Fix — query rewriting:** `rewrite_query_with_history()` added to
+`gemini_client.py`. Before searching, if conversation history exists, an
+ambiguous follow-up is rewritten into a standalone question using prior
+turns (e.g. "I asked difference?" → "What is the difference between
+Django, FastAPI, and Flask?") *before* embedding. The rewritten text is
+used only for search; the original wording is what's saved to history, so
+the conversation log still reads naturally.
+
+**Known limitation of this fix, found immediately after:** query rewriting
+only helps when a follow-up secretly contains a real question. It does
+**not** help meta-comments or control messages ("Answer is wrong", "I want
+general answer?") — these have no real question to recover, so rewriting
+them still produces text that searches right back into the same topic
+(e.g. "Is the FastAPI/Django/Flask answer wrong?" → still matches the
+FastAPI entry). Attempting to pattern-match phrases like "that's wrong" in
+code was explicitly rejected as fragile and unreliable (English has
+infinite equivalent phrasings).
+
+**Fix — UI escape hatch instead of text-intent detection:** every
+HIGH-confidence response now has a "Not what you wanted? Get a general
+answer" button. Clicking it re-sends the frontend's already-known
+*original* question straight to `/ask/general`, bypassing search entirely.
+Reliable by construction — no natural-language guessing involved.
+
+### UI iteration
+
+Light theme built first; later replaced with a dark theme (chat-bubble
+layout, floating bottom input bar, color-coded uppercase tags) per
+request. Functionality unchanged across the visual redesign.
+
+### KNOWN ISSUE — unresolved, real, needs a proper fix
+
+**The escape hatch fixes one bad answer, once, but the system has no
+memory of that decision on the next turn.** Observed directly: after using
+the "get general answer" button for the Django/FastAPI/Flask topic, the
+very next message in the same conversation ("I want longer answer for all
+3") hit `/ask` fresh, re-ran vector search from scratch, and landed right
+back on the same stored FastAPI entry at HIGH confidence — forcing the user
+to click the escape button again. `/ask` has no concept of "this
+conversation has already decided this topic needs general knowledge, not
+retrieval" — every single message re-searches independently regardless of
+what was decided one turn earlier.
+
+This is a real, unresolved design gap, not a one-off glitch. Explicitly
+**not being patched immediately** — decision made to hold off on deeper
+RAG/retrieval-vs-memory-interaction fixes until the remaining architecture
+(Day 6 memory summarization, Day 7 tool calling, Day 8 agentic loop) is in
+place, so the eventual fix can be designed with the full system in view
+rather than patched piecemeal. Revisit explicitly before considering
+AnswerVault's RAG behavior production-quality.
+
+**Broader, explicit note on state:** prompt quality and RAG reliability
+overall need significantly more adversarial testing before being
+considered solid — this day proved the *architecture* (tiers, memory,
+rewriting, escape hatches) all function, not that the system is tuned or
+robust yet. Real interview-style usage will keep surfacing edge cases like
+the ones above; that iteration is expected, not a sign something is wrong
+with the approach.
+
+**Result:** Day 5 functionally working end-to-end through a real UI, with
+several real bugs found and fixed along the way — but explicitly **not**
+marked complete. No tag issued for the frontend/memory work; commit made
+as a work-in-progress checkpoint (`day-5-frontend-wip` in spirit, no tag
+per the decision to only tag genuinely solid milestones).
+
+---
+
+## Day 6 — Long-term memory / summarization (planned)
+
+*(To be filled in once built. Note: may need to incorporate a fix for the
+Day 5 known issue — conversations "forgetting" a prior general-knowledge
+decision — as part of this day's design, since summarization and
+mode-tracking are related problems.)*
